@@ -11,12 +11,12 @@
 #include <cmath>
 #include <sstream>
 #include <cstdint>
-#include <thread>   // delay
+#include <thread>
 
 using namespace std;
 
 // =================== Config ===================
-static const int MSG_DELAY_MS = 1200; // sutrumpintas default delay ~1.2 s
+static const int MSG_DELAY_MS = 1200; //delay ~1.2 s
 
 // Maža pagalbinė pauzė
 inline void pauseMsg(int ms = MSG_DELAY_MS) {
@@ -80,10 +80,10 @@ struct World {
 // Atnaujinimai (mod'ai)
 struct Upgrades {
     bool weaponsCalibration = false;     // +10% fight
-    int  kineticBarriersLevel = 0;       // 0 none, 1:+7% fight & -50% storm fuel loss, 2:+12% fight & -50% storm fuel loss
-    bool ediTargeting = false;           // +5% fight, -3% flight fail
-    bool engineOverdrive = false;        // -15 pp flight fail; success extra fuel +35% vietoj +50%
-    bool cargoDampeners = false;         // -50% cargo loss tikimybių (storm/flight-fail)
+    int  kineticBarriersLevel = 0;      // 0 none, 1:+7% fight & -50% storm fuel loss, 2:+12% fight & -50% storm fuel loss
+    bool ediTargeting = false;          // +5% fight, -3% flight fail
+    bool engineOverdrive = false;       // -15 pp flight fail; success extra fuel +35% vietoj +50%
+    bool cargoDampeners = false;        // -50% cargo loss tikimybių (storm/flight-fail)
 
     int fightBonus() const {
         int b = 0;
@@ -105,6 +105,12 @@ struct Upgrades {
     }
     double cargoLossMultiplier() const {
         return cargoDampeners ? 0.5 : 1.0;
+    }
+    // Nauja: Reaper catch šanso sumažinimas
+    int reaperCatchReductionPP() const {
+        if (kineticBarriersLevel == 1) return 8;   // Mk I mažina 8 pp
+        if (kineticBarriersLevel == 2) return 15;  // Mk II mažina 15 pp
+        return 0;
     }
 };
 
@@ -129,20 +135,18 @@ struct HopContext {
 };
 
 // =================== Event System ===================
-enum class EventType { None, Reaper, Cerberus, Storm, NavigationFail, Station };
+enum class EventType { None, Reaper, Cerberus, Storm, NavigationFail };
 
 struct EventOutcome {
     bool gameOver = false;
     string log;
-    bool movedToRandomNeighbor = false;
-    bool ambushConvertedToCerberus = false;
 };
 
 struct Game; // forward
 
 // Deklaracijos
 EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl);
-EventOutcome stationEncounter(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl);
+EventOutcome reaperEncounter(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl);
 
 // =================== Game Core ===================
 struct Game {
@@ -151,6 +155,9 @@ struct Game {
     int rounds = 5;
     vector<int> roundTargets; // for 1..5, last is Earth
     int earthId = -1;
+
+    // Planetų station naudotas ar ne
+    vector<bool> stationVisited; // true: ši planeta jau tikrinta (operational/wreck/ambush)
 
     // Raundo sunkumo multiplikatorius (event suveikimo šansui)
     double roundMult(int roundNo) const {
@@ -216,7 +223,7 @@ struct Game {
         player.current = eden;
         player.prevNode = -1;
         player.fuel = 1000;
-        player.credits = 1000; // kaip susitarėm
+        player.credits = 1000;
         player.cargo = true;
 
         // Round tikslai: 1..4 random iš sąrašo, 5 - Earth
@@ -225,6 +232,9 @@ struct Game {
         roundTargets.clear();
         for (int i = 0; i < 4 && i < (int)candidates.size(); ++i) roundTargets.push_back(candidates[i]);
         roundTargets.push_back(earth);
+
+        // station visited flags
+        stationVisited.assign(world.planets.size(), false);
     }
 
     // Statuso spausdinimas
@@ -250,7 +260,31 @@ struct Game {
         line();
     }
 
-    // Shop (pigesni atnaujinimai, ASCII minus'ai)
+    // ASCII žemėlapis
+    void printMap() {
+        cout << R"(
+[Eden Prime] -------------- [Feros] ----------------- [Horizon]          
+       \                   /                                  \          
+        \                 /            [Noveria]               \         
+         \               /            /         \               \        
+          \             /            /           \               \       
+           \           /            /             \               \      
+            \         /            /               \               \     
+             [Citadel] -----------|---------------- [Illium] ---- [Omega]
+             /       \             \               /               /     
+            /         \             \             /               /      
+           /           \             \           /               /       
+          /             \             \         /               /        
+         /               \             [Thessia]               /         
+        /                 \                                   /          
+       /                   \                                 /           
+      /                     \                               /            
+  [Earth] ------------- [Palaven] ---------------- [Tuchanka]
+
+)";
+    }
+
+    // Shop
     void openShop(Player& pl) {
         while (true) {
             cout << "Relay Station: you may buy fuel or upgrades. 1 Fuel = 1 Credit.\n";
@@ -274,8 +308,8 @@ struct Game {
                     // Naujos kainos: 600 / 450 / 900 / 400 / 500 / 700
                     cout << "UPGRADES (discounted prices):\n";
                     cout << " 1) Weapons Calibration (+10% fight) - 600\n";
-                    cout << " 2) Kinetic Barriers Mk I (+7% fight, -50% storm fuel loss) - 450\n";
-                    cout << " 3) Kinetic Barriers Mk II (+12% fight, -50% storm fuel loss) - 900 (replaces Mk I)\n";
+                    cout << " 2) Kinetic Barriers Mk I (+7% fight, -50% storm fuel loss, -Reaper catch) - 450\n";
+                    cout << " 3) Kinetic Barriers Mk II (+12% fight, -50% storm fuel loss, more -Reaper catch) - 900 (replaces Mk I)\n";
                     cout << " 4) EDI Combat Targeting (+5% fight, -3% flight fail) - 400\n";
                     cout << " 5) Engine Overdrive (-15 pp flight fail, success extra fuel +35% instead of +50%) - 500\n";
                     cout << " 6) Cargo Dampeners (-50% cargo loss chances) - 700\n";
@@ -295,11 +329,17 @@ struct Game {
                         buy(600, [&] { pl.mods.weaponsCalibration = true; });
                     }
                     else if (u == 2) {
-                        if (pl.mods.kineticBarriersLevel >= 1) { cout << "You already have Barriers (Mk " << pl.mods.kineticBarriersLevel << ").\n"; continue; }
+                        if (pl.mods.kineticBarriersLevel >= 1) {
+                            cout << "You already have Barriers (Mk " << pl.mods.kineticBarriersLevel << ").\n";
+                            continue;
+                        }
                         buy(450, [&] { pl.mods.kineticBarriersLevel = 1; });
                     }
                     else if (u == 3) {
-                        if (pl.mods.kineticBarriersLevel == 2) { cout << "You already have Mk II.\n"; continue; }
+                        if (pl.mods.kineticBarriersLevel == 2) {
+                            cout << "You already have Mk II.\n";
+                            continue;
+                        }
                         buy(900, [&] { pl.mods.kineticBarriersLevel = 2; });
                     }
                     else if (u == 4) {
@@ -329,14 +369,15 @@ struct Game {
         }
     }
 
-    // --- Event pool svoriai pagal bucket ir raundą (EARLY buffed stations) ---
+    // --- Event pool svoriai pagal bucket ir raundą ---
+    // Reaper'ai matomi High risk bucket, bet jau nuo early game (mažas weight)
     vector<pair<EventType, int>> buildEventPool(RiskBucket b, int roundNo) {
         vector<pair<EventType, int>> pool;
-        auto L = [&](int st, int nav, int storm) {
-            pool = { {EventType::Station,st},{EventType::NavigationFail,nav},{EventType::Storm,storm} };
+        auto L = [&](int nav, int storm) {
+            pool = { {EventType::NavigationFail,nav},{EventType::Storm,storm} };
             };
-        auto M = [&](int cerb, int storm, int nav, int st) {
-            pool = { {EventType::Cerberus,cerb},{EventType::Storm,storm},{EventType::NavigationFail,nav},{EventType::Station,st} };
+        auto M = [&](int cerb, int storm, int nav) {
+            pool = { {EventType::Cerberus,cerb},{EventType::Storm,storm},{EventType::NavigationFail,nav} };
             };
         auto H = [&](int reaper, int cerb, int storm) {
             pool = { {EventType::Reaper,reaper},{EventType::Cerberus,cerb},{EventType::Storm,storm} };
@@ -345,29 +386,30 @@ struct Game {
         switch (b) {
         case RiskBucket::Low:
             switch (roundNo) {
-            case 1: L(12, 2, 1); break;  // LABAI daug stočių anksti
-            case 2: L(9, 3, 2);  break;
-            case 3: L(5, 3, 3);  break;
-            case 4: L(3, 3, 5);  break;
-            default: L(2, 2, 7); break;  // late - audros dominuoja
+            case 1: L(3, 2); break;
+            case 2: L(4, 3); break;
+            case 3: L(4, 4); break;
+            case 4: L(3, 5); break;
+            default: L(2, 7); break;
             }
             break;
         case RiskBucket::Medium:
             switch (roundNo) {
-            case 1: M(3, 2, 2, 5); break; // pridėtas papildomas station svoris early
-            case 2: M(4, 3, 2, 3); break;
-            case 3: M(5, 4, 2, 1); break;
-            case 4: M(6, 5, 1, 1); break;
-            default: M(7, 6, 1, 0); break;
+            case 1: M(3, 2, 2); break;
+            case 2: M(4, 3, 2); break;
+            case 3: M(5, 4, 2); break;
+            case 4: M(6, 5, 1); break;
+            default: M(7, 6, 1); break;
             }
             break;
         case RiskBucket::High:
+            // Early: reaper weight labai žemas, vėliau kyla, bet ne ekstremaliai
             switch (roundNo) {
-            case 1: H(1, 4, 3); break;   // reaper reti
-            case 2: H(2, 4, 4); break;
+            case 1: H(1, 4, 4); break;   // 1/9 ~11% Reaper event, maža tikimybė + maži catch šansai
+            case 2: H(2, 4, 5); break;
             case 3: H(3, 5, 5); break;
             case 4: H(4, 6, 6); break;
-            default: H(6, 7, 7); break;  // vėlyvai - žiauriai
+            default: H(5, 7, 7); break;  // vėlyvai - daugiau Reaper presence, bet catch <=50%
             }
             break;
         }
@@ -411,11 +453,11 @@ struct Game {
 
             EventType hint = deterministicEventForRoute(r, roundNo);
             cout << "  event: ";
-            if (hint == EventType::Reaper) cout << "Reaper Assault";
+            if (hint == EventType::Reaper) cout << "Reaper Presence";
             else if (hint == EventType::Cerberus) cout << "Cerberus Attack";
             else if (hint == EventType::Storm) cout << "Space Storm";
             else if (hint == EventType::NavigationFail) cout << "Navigation Failure";
-            else if (hint == EventType::Station) cout << "Fuel/Upgrade Station";
+            else cout << "None";
             cout << "\n";
         }
         cout << setw(2) << options.size() + 1 << ") Cancel (menu)\n";
@@ -428,6 +470,65 @@ struct Game {
             if (player.fuel >= r.fuelCost) return false;
         }
         return true;
+    }
+
+    // Pasiūlyti aplankyti vietinę stotį šioje planetoje (1 kartą per planetą)
+    bool maybeVisitLocalStation(int roundNo) {
+        int p = player.current;
+        if (p < 0 || p >= (int)stationVisited.size()) return true;
+        if (stationVisited[p]) return true; // jau tikrinta
+
+        cout << "[RELAY STATION] Local fuel/upgrade depot on " << world.planets[p] << ". Visit?\n";
+        cout << "1) Yes  2) No\n";
+        int c; if (!(cin >> c)) return false;
+        if (c != 1) {
+            cout << "You ignore the local station for now.\n";
+            pauseMsg(800);
+            return true;
+        }
+
+        stationVisited[p] = true; // šita planeta jau patikrinta
+
+        int roll = randInt(1, 100);
+        if (roll <= 50) {
+            cout << "[STATION] The depot is operational. You can trade.\n";
+            pauseMsg(800);
+            openShop(player);
+            return true;
+        }
+        else if (roll <= 80) {
+            int fuelGain = randInt(50, 120);
+            int credGain = randInt(100, 240);
+            player.fuel += fuelGain;
+            player.credits += credGain;
+            cout << "[STATION] You find wreckage of an old depot. +"
+                << fuelGain << " fuel, +" << credGain << " credits.\n";
+            pauseMsg(800);
+            return true;
+        }
+        else {
+            cout << "[STATION] Ambush! Cerberus forces engage as you approach the depot.\n";
+            pauseMsg(800);
+            HopContext dummy{};
+            dummy.edgeFuelBase = 0;
+            dummy.routeRisk = 0.4;
+            dummy.bucket = RiskBucket::Medium;
+            RoundConfig rcFake{ roundNo, roundMult(roundNo) };
+            EventOutcome amb = cerberusEncounter(*this, dummy, rcFake, player);
+            cout << amb.log << "\n";
+            pauseMsg(800);
+
+            if (player.fuel <= 0) {
+                cout << "You ran out of fuel. Mission failed.\n";
+                return false;
+            }
+            if (amb.gameOver) return false;
+            if (!player.cargo) {
+                cout << "Cargo lost. Mission failed.\n";
+                return false;
+            }
+            return true;
+        }
     }
 
     // Vienas hop'as su event sprendimu
@@ -457,11 +558,9 @@ struct Game {
         // event tipas deterministinis
         EventType ev = deterministicEventForRoute(r, roundNo);
 
-        // taisyklė: jei tipas Station - event įvyksta GARANTUOTAI,
-        // kitaip - pagal eventChance
-        bool eventOccurs = (ev == EventType::Station) ? true : (rand01() < eventChance);
+        bool eventOccurs = (rand01() < eventChance);
 
-        if (!eventOccurs) {
+        if (!eventOccurs || ev == EventType::None) {
             cout << "Safe arrival. No events happened.\n";
             pauseMsg(800);
             return true;
@@ -469,8 +568,7 @@ struct Game {
 
         EventOutcome out;
         if (ev == EventType::Reaper) {
-            out.gameOver = true;
-            out.log = "[REAPER ASSAULT] A Reaper strike... no hope remains. Mission failed.";
+            out = reaperEncounter(*this, ctx, RoundConfig{ roundNo, mult }, player);
         }
         else if (ev == EventType::Cerberus) {
             out = cerberusEncounter(*this, ctx, RoundConfig{ roundNo, mult }, player);
@@ -504,9 +602,6 @@ struct Game {
             out.log = string("[NAVIGATION FAILURE] Course error. Fuel lost ")
                 + to_string(loss) + ". Remaining " + to_string(player.fuel) + ".";
         }
-        else if (ev == EventType::Station) {
-            out = stationEncounter(*this, ctx, RoundConfig{ roundNo, mult }, player);
-        }
         else {
             out.log = "An unexpected anomaly occurred, but no lasting effects.";
         }
@@ -531,12 +626,7 @@ struct Game {
         while (true) {
             printStatus(roundNo, target);
 
-            // STRANDED check prieš pasirinkimus
-            if (isStrandedHere()) {
-                cout << "You are stranded at " << world.planets[player.current] << ". Not enough fuel to reach any route. Mission failed.\n";
-                return false;
-            }
-
+            // Jei jau pasiektas tikslas – pirma užfiksuojam pergalę, be station
             if (player.current == target) {
                 cout << "Objective reached: " << world.planets[target] << ". Round complete!\n";
                 int bonus = missionBonus(roundNo);
@@ -544,6 +634,18 @@ struct Game {
                 cout << "You received a " << bonus << " credit bonus. Credits: " << player.credits << "\n";
                 pauseMsg(800);
                 return true;
+            }
+
+            // Suteikiam šansą aplankyti lokalų depot (1 kartas šioje planetoje)
+            if (!maybeVisitLocalStation(roundNo)) {
+                // žaidėjas galėjo mirti ambush'e
+                return false;
+            }
+
+            // STRANDED check po station (gal depot išgelbėjo)
+            if (isStrandedHere()) {
+                cout << "You are stranded at " << world.planets[player.current] << ". Not enough fuel to reach any route. Mission failed.\n";
+                return false;
             }
 
             vector<Route> options = world.adj[player.current];
@@ -563,15 +665,12 @@ struct Game {
                 else if (m == 2) { cout << "Exiting. Thanks for playing.\n"; return false; }
                 else if (m == 3) { cout << "You wait and reconsider.\n"; pauseMsg(800); }
                 else if (m == 4) {
-                    cout << "Map (planets):\n";
-                    for (size_t i = 0; i < world.planets.size(); ++i) {
-                        cout << setw(2) << i << ": " << world.planets[i] << "\n";
-                    }
+                    printMap();
                     pauseMsg(800);
                 }
                 continue;
             }
-            if (choice<1 || choice>(int)options.size()) {
+            if (choice < 1 || choice >(int)options.size()) {
                 cout << "Invalid choice.\n"; pauseMsg(800); continue;
             }
             const Route& r = options[choice - 1];
@@ -617,7 +716,7 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
     else base = 30;
 
     int roundPenalty = (rc.number - 1) * 5;      // 0,5,10,15,20
-    int combatBonus = pl.mods.fightBonus();  // iki +27
+    int combatBonus = pl.mods.fightBonus();      // iki +27
     int victoryChance = clampi(base - roundPenalty + combatBonus, 10, 90);
 
     // Bėgimo nesėkmės šansas
@@ -701,41 +800,52 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
     return out;
 }
 
-// Stotis (shop/wreck/ambush) - kviečiama GARANTUOTAI, jei preview tipas buvo Station
-EventOutcome stationEncounter(Game& game, const HopContext& /*hop*/, const RoundConfig& /*rc*/, Player& pl) {
+// Reaper encounter: šansas būti pagautam (early mažas, late didesnis, max 50%),
+// Kinetic Barriers sumažina šitą catch šansą.
+EventOutcome reaperEncounter(Game& /*game*/, const HopContext& hop, const RoundConfig& rc, Player& pl) {
     EventOutcome out;
-    cout << "[RELAY STATION] A station is detected in this system. Investigate?\n";
-    cout << "1) Yes  2) No\n";
-    int c; cin >> c;
-    if (c != 1) { out.log = "[STATION] You keep your distance. Journey continues."; return out; }
+    cout << "[REAPER SIGNATURE] A Reaper signal flickers at the edge of your sensors...\n";
+    pauseMsg(800);
 
-    int roll = randInt(1, 100);
-    if (roll <= 50) {
-        out.log = "[STATION] The station is operational. You can trade.";
-        cout << out.log << "\n";
-        pauseMsg(800);
-        game.openShop(pl);
+    int baseCatch = 0;
+    // Bazė pagal risk bucket + raundą
+    if (hop.bucket == RiskBucket::High) {
+        // 10, 20, 30, 40, 50
+        baseCatch = 10 + (rc.number - 1) * 10;
     }
-    else if (roll <= 80) {
-        int fuelGain = randInt(50, 120);
-        int credGain = randInt(100, 240); // kiek daugiau kreditų iš wreck
-        pl.fuel += fuelGain;
-        pl.credits += credGain;
-        out.log = string("[STATION] Wreckage found. +")
-            + to_string(fuelGain) + " fuel, +" + to_string(credGain) + " credits.";
+    else if (hop.bucket == RiskBucket::Medium) {
+        // 5, 10, 15, 20, 25
+        baseCatch = 5 + (rc.number - 1) * 5;
     }
     else {
-        cout << "[STATION] Ambush! Cerberus forces engage.\n";
-        pauseMsg(800);
-        // Ambush perėmimas - naudokim tą patį Cerberus encounter
-        HopContext dummy{};
-        dummy.edgeFuelBase = 0;
-        dummy.routeRisk = 0.4;
-        dummy.bucket = RiskBucket::Medium;
-        RoundConfig rcFake{ 2,1.0 };
-        EventOutcome amb = cerberusEncounter(game, dummy, rcFake, pl);
-        amb.ambushConvertedToCerberus = true;
-        return amb;
+        // Low: labai maži šansai
+        // 3, 5, 7, 9, 11 (realiai ~3-11%)
+        baseCatch = 3 + (rc.number - 1) * 2;
+    }
+
+    // Kinetic Barriers mažina catch procentus
+    baseCatch = clampi(baseCatch - pl.mods.reaperCatchReductionPP(), 0, 50);
+
+    cout << " Reaper lock-on chance: " << baseCatch << "%";
+    if (pl.mods.kineticBarriersLevel > 0) {
+        cout << " (reduced by Kinetic Barriers Mk " << pl.mods.kineticBarriersLevel << ")";
+    }
+    cout << "\n";
+    cout << " If caught: total annihilation.\n";
+    cout << " If you evade: evasive maneuvers cost some fuel.\n";
+    pauseMsg(800);
+
+    bool caught = (rand01() < (baseCatch / 100.0));
+    if (caught) {
+        out.gameOver = true;
+        out.log = "[REAPER] The Reaper acquires a solid lock. There is no escape. Mission failed.";
+    }
+    else {
+        int baseFuel = (hop.edgeFuelBase > 0 ? hop.edgeFuelBase : 80);
+        int loss = std::max(30, (int)std::lround(baseFuel * 0.5)); // 50% hop cost, min 30
+        pl.fuel = std::max(0, pl.fuel - loss);
+        out.log = string("[REAPER] You slip past the Reaper's gaze, but hard burns cost ")
+            + to_string(loss) + " fuel. Remaining " + to_string(pl.fuel) + ".";
     }
     return out;
 }
