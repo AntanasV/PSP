@@ -53,38 +53,28 @@ struct Route {
     bool bidir = true;
 };
 
-struct World {
-    vector<string> planets;
-    vector<vector<Route>> adj;
+// Atnaujinimai (mod'ai) - enkapsuliuoti
+class Upgrades {
+public:
+    // Getteriai
+    bool hasWeaponsCalibration() const { return weaponsCalibration; }
+    int  getKineticBarriersLevel() const { return kineticBarriersLevel; } // 0,1,2
+    bool hasEdiTargeting() const { return ediTargeting; }
+    bool hasEngineOverdrive() const { return engineOverdrive; }
+    bool hasCargoDampeners() const { return cargoDampeners; }
 
-    int addPlanet(const string& name) {
-        planets.push_back(name);
-        adj.push_back({});
-        return (int)planets.size() - 1;
+    // "Setteriai" / veiksmų metodai
+    void buyWeaponsCalibration() { weaponsCalibration = true; }
+    void setKineticBarriersLevel(int level) {
+        if (level < 0) level = 0;
+        if (level > 2) level = 2;
+        kineticBarriersLevel = level;
     }
-    void addRoute(int a, int b, int fuel, double risk, bool bidir = true) {
-        Route r1{ a,b,fuel,risk,bidir };
-        adj[a].push_back(r1);
-        if (bidir) {
-            Route r2{ b,a,fuel,risk,bidir };
-            adj[b].push_back(r2);
-        }
-    }
-    RiskBucket bucket(double r) const {
-        if (r <= 0.30) return RiskBucket::Low;
-        if (r <= 0.50) return RiskBucket::Medium;
-        return RiskBucket::High;
-    }
-};
+    void enableEdiTargeting() { ediTargeting = true; }
+    void enableEngineOverdrive() { engineOverdrive = true; }
+    void enableCargoDampeners() { cargoDampeners = true; }
 
-// Atnaujinimai (mod'ai)
-struct Upgrades {
-    bool weaponsCalibration = false;     // +10% fight
-    int  kineticBarriersLevel = 0;      // 0 none, 1:+7% fight & -50% storm fuel loss, 2:+12% fight & -50% storm fuel loss
-    bool ediTargeting = false;          // +5% fight, -3% flight fail
-    bool engineOverdrive = false;       // -15 pp flight fail; success extra fuel +35% vietoj +50%
-    bool cargoDampeners = false;        // -50% cargo loss tikimybių (storm/flight-fail)
-
+    // Bonus skaičiavimai
     int fightBonus() const {
         int b = 0;
         if (weaponsCalibration) b += 10;
@@ -93,34 +83,129 @@ struct Upgrades {
         if (ediTargeting) b += 5;
         return b;
     }
+
     int flightFailReductionPP() const {
         int pp = 0;
         if (ediTargeting) pp += 3;
         if (engineOverdrive) pp += 15;
         return pp;
     }
+
     double stormFuelLossMultiplier() const {
         if (kineticBarriersLevel > 0) return 0.5;
         return 1.0;
     }
+
     double cargoLossMultiplier() const {
         return cargoDampeners ? 0.5 : 1.0;
     }
-    // Nauja: Reaper catch šanso sumažinimas
+
+    // Reaper catch šanso sumažinimas
     int reaperCatchReductionPP() const {
         if (kineticBarriersLevel == 1) return 8;   // Mk I mažina 8 pp
         if (kineticBarriersLevel == 2) return 15;  // Mk II mažina 15 pp
         return 0;
     }
+
+private:
+    bool weaponsCalibration = false; // +10% fight
+    int  kineticBarriersLevel = 0;   // 0 none, 1:+7% fight & -50% storm fuel loss, 2:+12% fight & -50% storm fuel loss
+    bool ediTargeting = false;       // +5% fight, -3% flight fail
+    bool engineOverdrive = false;    // -15 pp flight fail; success extra fuel +35% vietoj +50%
+    bool cargoDampeners = false;     // -50% cargo loss tikimybių (storm/flight-fail)
 };
 
-struct Player {
+// Žaidėjas - enkapsuliuotas
+class Player {
+public:
+    Player() = default;
+
+    // Planetos
+    int  getCurrentPlanet() const { return current; }
+    void setCurrentPlanet(int id) { current = id; }
+
+    int  getPreviousPlanet() const { return prevNode; }
+    void setPreviousPlanet(int id) { prevNode = id; }
+
+    // Fuel
+    int  getFuel() const { return fuel; }
+    void setFuel(int f) { fuel = max(0, f); }
+    void addFuel(int delta) { fuel = max(0, fuel + delta); }
+    bool spendFuel(int amount) {
+        if (amount < 0) return false;
+        if (fuel < amount) return false;
+        fuel -= amount;
+        return true;
+    }
+
+    // Credits
+    int  getCredits() const { return credits; }
+    void setCredits(int c) { credits = max(0, c); }
+    void addCredits(int delta) { credits = max(0, credits + delta); }
+    bool spendCredits(int amount) {
+        if (amount < 0) return false;
+        if (credits < amount) return false;
+        credits -= amount;
+        return true;
+    }
+
+    // Cargo
+    bool hasCargo() const { return cargo; }
+    void loseCargo() { cargo = false; }
+    void resetCargo() { cargo = true; }
+
+    // Upgrades
+    Upgrades& getUpgrades() { return mods; }
+    const Upgrades& getUpgrades() const { return mods; }
+
+private:
     int current = -1;
     int prevNode = -1;
     int fuel = 1000;
     int credits = 1000;   // STARTAS: 1000 kredų
     bool cargo = true;    // if lost -> game over
     Upgrades mods;
+};
+
+// Pasaulis - enkapsuliuotas
+class World {
+public:
+    int addPlanet(const string& name) {
+        planets.push_back(name);
+        adj.push_back({});
+        return static_cast<int>(planets.size()) - 1;
+    }
+
+    void addRoute(int a, int b, int fuel, double risk, bool bidir = true) {
+        Route r1{ a,b,fuel,risk,bidir };
+        adj[a].push_back(r1);
+        if (bidir) {
+            Route r2{ b,a,fuel,risk,bidir };
+            adj[b].push_back(r2);
+        }
+    }
+
+    RiskBucket bucket(double r) const {
+        if (r <= 0.30) return RiskBucket::Low;
+        if (r <= 0.50) return RiskBucket::Medium;
+        return RiskBucket::High;
+    }
+
+    const string& getPlanetName(int id) const {
+        return planets.at(id);
+    }
+
+    int getPlanetCount() const {
+        return static_cast<int>(planets.size());
+    }
+
+    const vector<Route>& getRoutesFrom(int planetId) const {
+        return adj.at(planetId);
+    }
+
+private:
+    vector<string> planets;
+    vector<vector<Route>> adj;
 };
 
 struct RoundConfig {
@@ -220,11 +305,11 @@ struct Game {
         world.addRoute(pal, earth, 130, 0.55);
 
         // Žaidėjo startas
-        player.current = eden;
-        player.prevNode = -1;
-        player.fuel = 1000;
-        player.credits = 1000;
-        player.cargo = true;
+        player.setCurrentPlanet(eden);
+        player.setPreviousPlanet(-1);
+        player.setFuel(1000);
+        player.setCredits(1000);
+        player.resetCargo();
 
         // Round tikslai: 1..4 random iš sąrašo, 5 - Earth
         vector<int> candidates = { the, nov, pal, ill, omega, fer, hor, tuc, cit };
@@ -234,24 +319,27 @@ struct Game {
         roundTargets.push_back(earth);
 
         // station visited flags
-        stationVisited.assign(world.planets.size(), false);
+        stationVisited.assign(world.getPlanetCount(), false);
     }
 
     // Statuso spausdinimas
     void printStatus(int roundNo, int target) {
         line();
         cout << "Round " << roundNo << " / " << rounds << "\n";
-        cout << "Location: " << world.planets[player.current] << "\n";
-        cout << "Objective: " << world.planets[target] << "\n";
-        cout << "Fuel: " << player.fuel << "   Credits: " << player.credits << "   Cargo: " << (player.cargo ? "secured" : "LOST") << "\n";
+        cout << "Location: " << world.getPlanetName(player.getCurrentPlanet()) << "\n";
+        cout << "Objective: " << world.getPlanetName(target) << "\n";
+        cout << "Fuel: " << player.getFuel()
+            << "   Credits: " << player.getCredits()
+            << "   Cargo: " << (player.hasCargo() ? "secured" : "LOST") << "\n";
         cout << "Upgrades: ";
         vector<string> m;
-        if (player.mods.weaponsCalibration) m.push_back("Weapons Calibration");
-        if (player.mods.kineticBarriersLevel == 1) m.push_back("Kinetic Barriers Mk I");
-        if (player.mods.kineticBarriersLevel == 2) m.push_back("Kinetic Barriers Mk II");
-        if (player.mods.ediTargeting) m.push_back("EDI Targeting");
-        if (player.mods.engineOverdrive) m.push_back("Engine Overdrive");
-        if (player.mods.cargoDampeners) m.push_back("Cargo Dampeners");
+        const Upgrades& mods = player.getUpgrades();
+        if (mods.hasWeaponsCalibration()) m.push_back("Weapons Calibration");
+        if (mods.getKineticBarriersLevel() == 1) m.push_back("Kinetic Barriers Mk I");
+        if (mods.getKineticBarriersLevel() == 2) m.push_back("Kinetic Barriers Mk II");
+        if (mods.hasEdiTargeting()) m.push_back("EDI Targeting");
+        if (mods.hasEngineOverdrive()) m.push_back("Engine Overdrive");
+        if (mods.hasCargoDampeners()) m.push_back("Cargo Dampeners");
         if (m.empty()) cout << "(none)";
         else {
             for (size_t i = 0; i < m.size(); ++i) { if (i) cout << ", "; cout << m[i]; }
@@ -288,7 +376,7 @@ struct Game {
     void openShop(Player& pl) {
         while (true) {
             cout << "Relay Station: you may buy fuel or upgrades. 1 Fuel = 1 Credit.\n";
-            cout << "Credits: " << pl.credits << "   Fuel: " << pl.fuel << "\n";
+            cout << "Credits: " << pl.getCredits() << "   Fuel: " << pl.getFuel() << "\n";
             cout << "1) Buy fuel\n";
             cout << "2) Buy upgrades\n";
             cout << "3) Leave station\n";
@@ -298,10 +386,11 @@ struct Game {
                 cout << "How much fuel to buy? ";
                 int amt; cin >> amt;
                 if (amt <= 0) { cout << "Nothing purchased.\n"; continue; }
-                if (amt > pl.credits) { cout << "Not enough credits.\n"; continue; }
-                pl.credits -= amt;
-                pl.fuel += amt;
-                cout << "Purchased " << amt << " fuel. Now you have " << pl.fuel << " fuel, " << pl.credits << " credits.\n";
+                if (amt > pl.getCredits()) { cout << "Not enough credits.\n"; continue; }
+                pl.spendCredits(amt);
+                pl.addFuel(amt);
+                cout << "Purchased " << amt << " fuel. Now you have "
+                    << pl.getFuel() << " fuel, " << pl.getCredits() << " credits.\n";
             }
             else if (c == 2) {
                 while (true) {
@@ -314,45 +403,52 @@ struct Game {
                     cout << " 5) Engine Overdrive (-15 pp flight fail, success extra fuel +35% instead of +50%) - 500\n";
                     cout << " 6) Cargo Dampeners (-50% cargo loss chances) - 700\n";
                     cout << " 7) Back\n";
-                    cout << "Credits: " << pl.credits << "\n";
+                    cout << "Credits: " << pl.getCredits() << "\n";
                     cout << "Select: ";
                     int u; cin >> u;
                     if (u == 7) break;
-                    auto buy = [&](int price, function<void()> apply) {
-                        if (pl.credits < price) { cout << "Not enough credits.\n"; return; }
-                        apply();
-                        pl.credits -= price;
-                        cout << "Purchased. Remaining credits: " << pl.credits << "\n";
+
+                    auto buy = [&](int price, function<void(Upgrades&)> apply) {
+                        if (pl.getCredits() < price) {
+                            cout << "Not enough credits.\n";
+                            return;
+                        }
+                        apply(pl.getUpgrades());
+                        pl.spendCredits(price);
+                        cout << "Purchased. Remaining credits: " << pl.getCredits() << "\n";
                         };
+
+                    Upgrades& mods = pl.getUpgrades();
+
                     if (u == 1) {
-                        if (pl.mods.weaponsCalibration) { cout << "You already own this.\n"; continue; }
-                        buy(600, [&] { pl.mods.weaponsCalibration = true; });
+                        if (mods.hasWeaponsCalibration()) { cout << "You already own this.\n"; continue; }
+                        buy(600, [](Upgrades& m) { m.buyWeaponsCalibration(); });
                     }
                     else if (u == 2) {
-                        if (pl.mods.kineticBarriersLevel >= 1) {
-                            cout << "You already have Barriers (Mk " << pl.mods.kineticBarriersLevel << ").\n";
+                        if (mods.getKineticBarriersLevel() >= 1) {
+                            cout << "You already have Barriers (Mk " << mods.getKineticBarriersLevel() << ").\n";
                             continue;
                         }
-                        buy(450, [&] { pl.mods.kineticBarriersLevel = 1; });
+                        buy(450, [](Upgrades& m) { m.setKineticBarriersLevel(1); });
                     }
                     else if (u == 3) {
-                        if (pl.mods.kineticBarriersLevel == 2) {
+                        if (mods.getKineticBarriersLevel() == 2) {
                             cout << "You already have Mk II.\n";
                             continue;
                         }
-                        buy(900, [&] { pl.mods.kineticBarriersLevel = 2; });
+                        buy(900, [](Upgrades& m) { m.setKineticBarriersLevel(2); });
                     }
                     else if (u == 4) {
-                        if (pl.mods.ediTargeting) { cout << "You already own EDI Targeting.\n"; continue; }
-                        buy(400, [&] { pl.mods.ediTargeting = true; });
+                        if (mods.hasEdiTargeting()) { cout << "You already own EDI Targeting.\n"; continue; }
+                        buy(400, [](Upgrades& m) { m.enableEdiTargeting(); });
                     }
                     else if (u == 5) {
-                        if (pl.mods.engineOverdrive) { cout << "You already own Engine Overdrive.\n"; continue; }
-                        buy(500, [&] { pl.mods.engineOverdrive = true; });
+                        if (mods.hasEngineOverdrive()) { cout << "You already own Engine Overdrive.\n"; continue; }
+                        buy(500, [](Upgrades& m) { m.enableEngineOverdrive(); });
                     }
                     else if (u == 6) {
-                        if (pl.mods.cargoDampeners) { cout << "You already own Cargo Dampeners.\n"; continue; }
-                        buy(700, [&] { pl.mods.cargoDampeners = true; });
+                        if (mods.hasCargoDampeners()) { cout << "You already own Cargo Dampeners.\n"; continue; }
+                        buy(700, [](Upgrades& m) { m.enableCargoDampeners(); });
                     }
                     else {
                         cout << "Invalid option.\n";
@@ -440,14 +536,14 @@ struct Game {
 
     // Kaimynų sąrašas su „preview“ (tikimybės ir DETERMINISTINIS event tipas)
     void showNeighborsWithPreview(int roundNo, int /*target*/, vector<Route>& options) {
-        cout << "Available jumps from " << world.planets[player.current] << ":\n";
+        cout << "Available jumps from " << world.getPlanetName(player.getCurrentPlanet()) << ":\n";
         double mult = roundMult(roundNo);
         for (size_t i = 0; i < options.size(); ++i) {
             const Route& r = options[i];
             RiskBucket b = world.bucket(r.risk);
             string rb = (b == RiskBucket::Low ? "LOW" : (b == RiskBucket::Medium ? "MEDIUM" : "HIGH"));
             int chancePct = (int)std::lround(clampd(r.risk * mult, 0.05, 0.95) * 100.0);
-            cout << setw(2) << i + 1 << ") " << world.planets[r.to]
+            cout << setw(2) << i + 1 << ") " << world.getPlanetName(r.to)
                 << "  fuel " << r.fuelCost
                 << "  event chance " << rb << " ~" << chancePct << "%";
 
@@ -465,20 +561,20 @@ struct Game {
 
     // Patikrinti „stranded“: turi kuro >0, bet nepakanka nė vienam kaimynui
     bool isStrandedHere() const {
-        const auto& opts = world.adj[player.current];
+        const auto& opts = world.getRoutesFrom(player.getCurrentPlanet());
         for (const auto& r : opts) {
-            if (player.fuel >= r.fuelCost) return false;
+            if (player.getFuel() >= r.fuelCost) return false;
         }
         return true;
     }
 
     // Pasiūlyti aplankyti vietinę stotį šioje planetoje (1 kartą per planetą)
     bool maybeVisitLocalStation(int roundNo) {
-        int p = player.current;
+        int p = player.getCurrentPlanet();
         if (p < 0 || p >= (int)stationVisited.size()) return true;
         if (stationVisited[p]) return true; // jau tikrinta
 
-        cout << "[RELAY STATION] Local fuel/upgrade depot on " << world.planets[p] << ". Visit?\n";
+        cout << "[RELAY STATION] Local fuel/upgrade depot on " << world.getPlanetName(p) << ". Visit?\n";
         cout << "1) Yes  2) No\n";
         int c; if (!(cin >> c)) return false;
         if (c != 1) {
@@ -499,8 +595,8 @@ struct Game {
         else if (roll <= 80) {
             int fuelGain = randInt(50, 120);
             int credGain = randInt(100, 240);
-            player.fuel += fuelGain;
-            player.credits += credGain;
+            player.addFuel(fuelGain);
+            player.addCredits(credGain);
             cout << "[STATION] You find wreckage of an old depot. +"
                 << fuelGain << " fuel, +" << credGain << " credits.\n";
             pauseMsg(800);
@@ -518,12 +614,12 @@ struct Game {
             cout << amb.log << "\n";
             pauseMsg(800);
 
-            if (player.fuel <= 0) {
+            if (player.getFuel() <= 0) {
                 cout << "You ran out of fuel. Mission failed.\n";
                 return false;
             }
             if (amb.gameOver) return false;
-            if (!player.cargo) {
+            if (!player.hasCargo()) {
                 cout << "Cargo lost. Mission failed.\n";
                 return false;
             }
@@ -533,7 +629,7 @@ struct Game {
 
     // Vienas hop'as su event sprendimu
     bool resolveHop(const Route& r, int roundNo, int /*target*/) {
-        if (player.fuel < r.fuelCost) {
+        if (player.getFuel() < r.fuelCost) {
             cout << "Not enough fuel for this jump.\n";
             pauseMsg(800);
             return true; // likti meniu
@@ -547,13 +643,14 @@ struct Game {
         double mult = roundMult(roundNo);
         double eventChance = clampd(r.risk * mult, 0.05, 0.95);
 
-        player.prevNode = player.current;
-        player.current = r.to;
-        player.fuel -= r.fuelCost;
-        cout << "Jump to " << world.planets[r.to] << "... -" << r.fuelCost << " fuel. Remaining " << player.fuel << ".\n";
+        player.setPreviousPlanet(player.getCurrentPlanet());
+        player.setCurrentPlanet(r.to);
+        player.spendFuel(r.fuelCost);
+        cout << "Jump to " << world.getPlanetName(r.to)
+            << "... -" << r.fuelCost << " fuel. Remaining " << player.getFuel() << ".\n";
         pauseMsg();
 
-        if (player.fuel < 0) { player.fuel = 0; }
+        if (player.getFuel() < 0) { player.setFuel(0); }
 
         // event tipas deterministinis
         EventType ev = deterministicEventForRoute(r, roundNo);
@@ -576,18 +673,19 @@ struct Game {
         else if (ev == EventType::Storm) {
             if (rand01() < 0.6) {
                 int percent = randInt(15, 30);
-                double mulStorm = player.mods.stormFuelLossMultiplier();
+                double mulStorm = player.getUpgrades().stormFuelLossMultiplier();
                 int realPct = std::max(1, (int)std::lround(percent * mulStorm));
-                int loss = std::max(1, (int)std::lround(player.fuel * (realPct / 100.0)));
-                player.fuel = std::max(0, player.fuel - loss);
+                int loss = std::max(1, (int)std::lround(player.getFuel() * (realPct / 100.0)));
+                player.setFuel(std::max(0, player.getFuel() - loss));
                 out.log = string("[SPACE STORM] Turbulence batters the hull. Fuel loss ")
                     + to_string(realPct) + "% (" + to_string(loss) + "). Remaining "
-                    + to_string(player.fuel) + ".";
+                    + to_string(player.getFuel()) + ".";
             }
             else {
-                double cargoFailProb = 1.0 * player.mods.cargoLossMultiplier(); // 1.0 or 0.5
+                double cargoFailProb = 1.0 * player.getUpgrades().cargoLossMultiplier(); // 1.0 or 0.5
                 bool loseCargo = (rand01() < cargoFailProb);
                 if (loseCargo) {
+                    player.loseCargo();
                     out.gameOver = true;
                     out.log = "[SPACE STORM] Cargo destroyed in the storm. Mission failed.";
                 }
@@ -597,10 +695,10 @@ struct Game {
             }
         }
         else if (ev == EventType::NavigationFail) {
-            int loss = std::max(80, (int)std::lround(player.fuel * 0.12));
-            player.fuel = std::max(0, player.fuel - loss);
+            int loss = std::max(80, (int)std::lround(player.getFuel() * 0.12));
+            player.setFuel(std::max(0, player.getFuel() - loss));
             out.log = string("[NAVIGATION FAILURE] Course error. Fuel lost ")
-                + to_string(loss) + ". Remaining " + to_string(player.fuel) + ".";
+                + to_string(loss) + ". Remaining " + to_string(player.getFuel()) + ".";
         }
         else {
             out.log = "An unexpected anomaly occurred, but no lasting effects.";
@@ -609,12 +707,12 @@ struct Game {
         cout << out.log << "\n";
         pauseMsg(800);
 
-        if (player.fuel <= 0) {
+        if (player.getFuel() <= 0) {
             cout << "You ran out of fuel. Mission failed.\n";
             return false;
         }
         if (out.gameOver) return false;
-        if (!player.cargo) {
+        if (!player.hasCargo()) {
             cout << "Cargo lost. Mission failed.\n";
             return false;
         }
@@ -627,11 +725,11 @@ struct Game {
             printStatus(roundNo, target);
 
             // Jei jau pasiektas tikslas – pirma užfiksuojam pergalę, be station
-            if (player.current == target) {
-                cout << "Objective reached: " << world.planets[target] << ". Round complete!\n";
+            if (player.getCurrentPlanet() == target) {
+                cout << "Objective reached: " << world.getPlanetName(target) << ". Round complete!\n";
                 int bonus = missionBonus(roundNo);
-                player.credits += bonus;
-                cout << "You received a " << bonus << " credit bonus. Credits: " << player.credits << "\n";
+                player.addCredits(bonus);
+                cout << "You received a " << bonus << " credit bonus. Credits: " << player.getCredits() << "\n";
                 pauseMsg(800);
                 return true;
             }
@@ -644,11 +742,13 @@ struct Game {
 
             // STRANDED check po station (gal depot išgelbėjo)
             if (isStrandedHere()) {
-                cout << "You are stranded at " << world.planets[player.current] << ". Not enough fuel to reach any route. Mission failed.\n";
+                cout << "You are stranded at " << world.getPlanetName(player.getCurrentPlanet())
+                    << ". Not enough fuel to reach any route. Mission failed.\n";
                 return false;
             }
 
-            vector<Route> options = world.adj[player.current];
+            const auto& neigh = world.getRoutesFrom(player.getCurrentPlanet());
+            vector<Route> options = neigh;
             if (options.empty()) {
                 cout << "Dead end. Nowhere to jump. Mission failed.\n";
                 return false;
@@ -681,7 +781,7 @@ struct Game {
 
     // Pagrindinis ciklas
     void run() {
-        cout << "Welcome, Commander. 'Space Courier' - Mass Effect themed run.\n";
+        cout << "Welcome, Commander. 'Kosminis Kurjeris'.\n";
         pauseMsg(800);
         initWorld();
         for (int round = 1; round <= rounds; ++round) {
@@ -690,7 +790,8 @@ struct Game {
             if (!ok) { cout << "Game over.\n"; return; }
         }
         cout << "FINALE: Earth reached, cargo delivered. Victory!\n";
-        cout << "Final tally: Fuel " << player.fuel << ", Credits " << player.credits << ".\n";
+        cout << "Final tally: Fuel " << player.getFuel()
+            << ", Credits " << player.getCredits() << ".\n";
     }
 };
 
@@ -709,6 +810,8 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
     cout << "[CERBERUS ATTACK] Hostiles detected. Fight or attempt to flee?\n";
     pauseMsg(800);
 
+    const Upgrades& mods = pl.getUpgrades();
+
     // Bazinis kovos šansas pagal kibirą
     int base = 0;
     if (hop.bucket == RiskBucket::Low) base = 60;
@@ -716,14 +819,14 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
     else base = 30;
 
     int roundPenalty = (rc.number - 1) * 5;      // 0,5,10,15,20
-    int combatBonus = pl.mods.fightBonus();      // iki +27
+    int combatBonus = mods.fightBonus();         // iki +27
     int victoryChance = clampi(base - roundPenalty + combatBonus, 10, 90);
 
     // Bėgimo nesėkmės šansas
     int flightFail = 15;
     if (hop.bucket == RiskBucket::High) flightFail += 5;
     flightFail += (rc.number - 1) * 2;           // +0,+2,+4,+6,+8
-    flightFail = clampi(flightFail - pl.mods.flightFailReductionPP(), 5, 40);
+    flightFail = clampi(flightFail - mods.flightFailReductionPP(), 5, 40);
 
     cout << " Fight victory chance: " << victoryChance << "%";
     int tier = labelVictoryTier(victoryChance);
@@ -737,7 +840,7 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
     else { minR = 150; maxR = 300; }
     cout << " Possible salvage on victory: " << minR << "-" << maxR << " credits.\n";
     cout << " Flee failure chance: " << flightFail << "%.\n";
-    int extraOk = pl.mods.engineOverdrive ? (int)ceil(hop.edgeFuelBase * 0.35) : (int)ceil(hop.edgeFuelBase * 0.50);
+    int extraOk = mods.hasEngineOverdrive() ? (int)ceil(hop.edgeFuelBase * 0.35) : (int)ceil(hop.edgeFuelBase * 0.50);
     int extraFail = (int)ceil(hop.edgeFuelBase * 1.00);
     cout << " Flee cost: success +" << extraOk << " fuel, failure +" << extraFail
         << " fuel, 25% chance to lose cargo on failure.\n";
@@ -749,23 +852,24 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
         bool win = (rand01() < (victoryChance / 100.0));
         if (win) {
             int reward = randInt(minR, maxR);
-            pl.credits += reward;
+            pl.addCredits(reward);
             out.log = string("[CERBERUS] Victory! Salvage recovered. +")
-                + to_string(reward) + " credits. Credits: " + to_string(pl.credits) + ".";
+                + to_string(reward) + " credits. Credits: " + to_string(pl.getCredits()) + ".";
         }
         else {
             bool loseCargo = (rand01() < 0.50);
             if (loseCargo) {
-                pl.cargo = false;
+                pl.loseCargo();
                 out.gameOver = true;
                 out.log = "[CERBERUS] Defeat. Cargo destroyed. Mission failed.";
             }
             else {
-                pl.fuel = std::max(0, pl.fuel - 150);
-                if (game.player.prevNode != -1) {
-                    game.player.current = game.player.prevNode;
+                int newFuel = max(0, pl.getFuel() - 150);
+                pl.setFuel(newFuel);
+                if (game.player.getPreviousPlanet() != -1) {
+                    game.player.setCurrentPlanet(game.player.getPreviousPlanet());
                     out.log = string("[CERBERUS] Defeat in battle. -150 fuel. Falling back to ")
-                        + game.world.planets[game.player.current] + ".";
+                        + game.world.getPlanetName(game.player.getCurrentPlanet()) + ".";
                 }
                 else {
                     out.log = "[CERBERUS] Defeat in battle. -150 fuel. Nowhere to retreat.";
@@ -777,21 +881,21 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
         bool fail = (rand01() < (flightFail / 100.0));
         if (!fail) {
             int extra = extraOk;
-            pl.fuel = std::max(0, pl.fuel - extra);
+            pl.setFuel(max(0, pl.getFuel() - extra));
             out.log = string("[CERBERUS] Successful escape. Extra fuel -") + to_string(extra) + ".";
         }
         else {
             int extra = extraFail;
-            pl.fuel = std::max(0, pl.fuel - extra);
-            bool loseCargo = (rand01() < (0.25 * pl.mods.cargoLossMultiplier()));
+            pl.setFuel(max(0, pl.getFuel() - extra));
+            bool loseCargo = (rand01() < (0.25 * mods.cargoLossMultiplier()));
             if (loseCargo) {
-                pl.cargo = false;
+                pl.loseCargo();
                 out.gameOver = true;
                 out.log = string("[CERBERUS] Escape failed. -") + to_string(extra)
                     + " fuel. Cargo lost. Mission failed.";
             }
             else {
-                pl.fuel = std::max(0, pl.fuel - 100);
+                pl.setFuel(max(0, pl.getFuel() - 100));
                 out.log = string("[CERBERUS] Escape failed. -") + to_string(extra)
                     + " fuel and additional -100 fuel due to damage.";
             }
@@ -806,6 +910,8 @@ EventOutcome reaperEncounter(Game& /*game*/, const HopContext& hop, const RoundC
     EventOutcome out;
     cout << "[REAPER SIGNATURE] A Reaper signal flickers at the edge of your sensors...\n";
     pauseMsg(800);
+
+    const Upgrades& mods = pl.getUpgrades();
 
     int baseCatch = 0;
     // Bazė pagal risk bucket + raundą
@@ -824,11 +930,11 @@ EventOutcome reaperEncounter(Game& /*game*/, const HopContext& hop, const RoundC
     }
 
     // Kinetic Barriers mažina catch procentus
-    baseCatch = clampi(baseCatch - pl.mods.reaperCatchReductionPP(), 0, 50);
+    baseCatch = clampi(baseCatch - mods.reaperCatchReductionPP(), 0, 50);
 
     cout << " Reaper lock-on chance: " << baseCatch << "%";
-    if (pl.mods.kineticBarriersLevel > 0) {
-        cout << " (reduced by Kinetic Barriers Mk " << pl.mods.kineticBarriersLevel << ")";
+    if (mods.getKineticBarriersLevel() > 0) {
+        cout << " (reduced by Kinetic Barriers Mk " << mods.getKineticBarriersLevel() << ")";
     }
     cout << "\n";
     cout << " If caught: total annihilation.\n";
@@ -843,9 +949,9 @@ EventOutcome reaperEncounter(Game& /*game*/, const HopContext& hop, const RoundC
     else {
         int baseFuel = (hop.edgeFuelBase > 0 ? hop.edgeFuelBase : 80);
         int loss = std::max(30, (int)std::lround(baseFuel * 0.5)); // 50% hop cost, min 30
-        pl.fuel = std::max(0, pl.fuel - loss);
+        pl.setFuel(max(0, pl.getFuel() - loss));
         out.log = string("[REAPER] You slip past the Reaper's gaze, but hard burns cost ")
-            + to_string(loss) + " fuel. Remaining " + to_string(pl.fuel) + ".";
+            + to_string(loss) + " fuel. Remaining " + to_string(pl.getFuel()) + ".";
     }
     return out;
 }
