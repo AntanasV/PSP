@@ -12,11 +12,12 @@
 #include <sstream>
 #include <cstdint>
 #include <thread>
+#include <memory>
 
 using namespace std;
 
 // =================== Config ===================
-static const int MSG_DELAY_MS = 1200; //delay ~1.2 s
+static const int MSG_DELAY_MS = 1200; // delay ~1.2 s
 
 // Maža pagalbinė pauzė
 inline void pauseMsg(int ms = MSG_DELAY_MS) {
@@ -229,9 +230,62 @@ struct EventOutcome {
 
 struct Game; // forward
 
-// Deklaracijos
-EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl);
-EventOutcome reaperEncounter(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl);
+// Abstrakti bazinė event klasė (abstraction + polymorphism + template method)
+class GameEvent {
+public:
+    virtual ~GameEvent() = default;
+
+    // Template Method: bendras įėjimo taškas visiems eventams
+    EventOutcome execute(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl) {
+        // Jei norėtume bendro logging / telemetry – dėtume čia.
+        return doExecute(game, hop, rc, pl);
+    }
+
+protected:
+    virtual EventOutcome doExecute(Game& game, const HopContext& hop,
+        const RoundConfig& rc, Player& pl) = 0;
+};
+
+// Konkrečių eventų klasės (inheritance)
+class CerberusEvent : public GameEvent {
+protected:
+    EventOutcome doExecute(Game& game, const HopContext& hop,
+        const RoundConfig& rc, Player& pl) override;
+};
+
+class ReaperEvent : public GameEvent {
+protected:
+    EventOutcome doExecute(Game& game, const HopContext& hop,
+        const RoundConfig& rc, Player& pl) override;
+};
+
+class StormEvent : public GameEvent {
+protected:
+    EventOutcome doExecute(Game& game, const HopContext& hop,
+        const RoundConfig& rc, Player& pl) override;
+};
+
+class NavigationFailEvent : public GameEvent {
+protected:
+    EventOutcome doExecute(Game& game, const HopContext& hop,
+        const RoundConfig& rc, Player& pl) override;
+};
+
+// Creational pattern: Factory
+class EventFactory {
+public:
+    static std::unique_ptr<GameEvent> create(EventType type) {
+        switch (type) {
+        case EventType::Cerberus:       return std::make_unique<CerberusEvent>();
+        case EventType::Reaper:         return std::make_unique<ReaperEvent>();
+        case EventType::Storm:          return std::make_unique<StormEvent>();
+        case EventType::NavigationFail: return std::make_unique<NavigationFailEvent>();
+        case EventType::None:
+        default:
+            return nullptr;
+        }
+    }
+};
 
 // =================== Game Core ===================
 struct Game {
@@ -610,7 +664,8 @@ struct Game {
             dummy.routeRisk = 0.4;
             dummy.bucket = RiskBucket::Medium;
             RoundConfig rcFake{ roundNo, roundMult(roundNo) };
-            EventOutcome amb = cerberusEncounter(*this, dummy, rcFake, player);
+            auto event = EventFactory::create(EventType::Cerberus);
+            EventOutcome amb = event->execute(*this, dummy, rcFake, player);
             cout << amb.log << "\n";
             pauseMsg(800);
 
@@ -663,46 +718,14 @@ struct Game {
             return true;
         }
 
-        EventOutcome out;
-        if (ev == EventType::Reaper) {
-            out = reaperEncounter(*this, ctx, RoundConfig{ roundNo, mult }, player);
+        auto eventObj = EventFactory::create(ev);
+        if (!eventObj) {
+            cout << "An unexpected anomaly occurred, but no lasting effects.\n";
+            pauseMsg(800);
+            return true;
         }
-        else if (ev == EventType::Cerberus) {
-            out = cerberusEncounter(*this, ctx, RoundConfig{ roundNo, mult }, player);
-        }
-        else if (ev == EventType::Storm) {
-            if (rand01() < 0.6) {
-                int percent = randInt(15, 30);
-                double mulStorm = player.getUpgrades().stormFuelLossMultiplier();
-                int realPct = std::max(1, (int)std::lround(percent * mulStorm));
-                int loss = std::max(1, (int)std::lround(player.getFuel() * (realPct / 100.0)));
-                player.setFuel(std::max(0, player.getFuel() - loss));
-                out.log = string("[SPACE STORM] Turbulence batters the hull. Fuel loss ")
-                    + to_string(realPct) + "% (" + to_string(loss) + "). Remaining "
-                    + to_string(player.getFuel()) + ".";
-            }
-            else {
-                double cargoFailProb = 1.0 * player.getUpgrades().cargoLossMultiplier(); // 1.0 or 0.5
-                bool loseCargo = (rand01() < cargoFailProb);
-                if (loseCargo) {
-                    player.loseCargo();
-                    out.gameOver = true;
-                    out.log = "[SPACE STORM] Cargo destroyed in the storm. Mission failed.";
-                }
-                else {
-                    out.log = "[SPACE STORM] Cargo narrowly preserved.";
-                }
-            }
-        }
-        else if (ev == EventType::NavigationFail) {
-            int loss = std::max(80, (int)std::lround(player.getFuel() * 0.12));
-            player.setFuel(std::max(0, player.getFuel() - loss));
-            out.log = string("[NAVIGATION FAILURE] Course error. Fuel lost ")
-                + to_string(loss) + ". Remaining " + to_string(player.getFuel()) + ".";
-        }
-        else {
-            out.log = "An unexpected anomaly occurred, but no lasting effects.";
-        }
+
+        EventOutcome out = eventObj->execute(*this, ctx, RoundConfig{ roundNo, mult }, player);
 
         cout << out.log << "\n";
         pauseMsg(800);
@@ -801,11 +824,12 @@ struct Game {
 static int labelVictoryTier(int victoryChancePct) {
     if (victoryChancePct <= 35) return 0; // Low chance -> biggest reward
     if (victoryChancePct <= 55) return 1; // Medium
-    return 2;                          // High chance -> smallest reward
+    return 2;                             // High chance -> smallest reward
 }
 
 // Cerberus: fight vs flight
-EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundConfig& rc, Player& pl) {
+EventOutcome CerberusEvent::doExecute(Game& game, const HopContext& hop,
+    const RoundConfig& rc, Player& pl) {
     EventOutcome out;
     cout << "[CERBERUS ATTACK] Hostiles detected. Fight or attempt to flee?\n";
     pauseMsg(800);
@@ -906,7 +930,8 @@ EventOutcome cerberusEncounter(Game& game, const HopContext& hop, const RoundCon
 
 // Reaper encounter: šansas būti pagautam (early mažas, late didesnis, max 50%),
 // Kinetic Barriers sumažina šitą catch šansą.
-EventOutcome reaperEncounter(Game& /*game*/, const HopContext& hop, const RoundConfig& rc, Player& pl) {
+EventOutcome ReaperEvent::doExecute(Game& /*game*/, const HopContext& hop,
+    const RoundConfig& rc, Player& pl) {
     EventOutcome out;
     cout << "[REAPER SIGNATURE] A Reaper signal flickers at the edge of your sensors...\n";
     pauseMsg(800);
@@ -953,6 +978,46 @@ EventOutcome reaperEncounter(Game& /*game*/, const HopContext& hop, const RoundC
         out.log = string("[REAPER] You slip past the Reaper's gaze, but hard burns cost ")
             + to_string(loss) + " fuel. Remaining " + to_string(pl.getFuel()) + ".";
     }
+    return out;
+}
+
+// Space Storm event (perkelta iš resolveHop)
+EventOutcome StormEvent::doExecute(Game& /*game*/, const HopContext& /*hop*/,
+    const RoundConfig& /*rc*/, Player& pl) {
+    EventOutcome out;
+    if (rand01() < 0.6) {
+        int percent = randInt(15, 30);
+        double mulStorm = pl.getUpgrades().stormFuelLossMultiplier();
+        int realPct = std::max(1, (int)std::lround(percent * mulStorm));
+        int loss = std::max(1, (int)std::lround(pl.getFuel() * (realPct / 100.0)));
+        pl.setFuel(std::max(0, pl.getFuel() - loss));
+        out.log = string("[SPACE STORM] Turbulence batters the hull. Fuel loss ")
+            + to_string(realPct) + "% (" + to_string(loss) + "). Remaining "
+            + to_string(pl.getFuel()) + ".";
+    }
+    else {
+        double cargoFailProb = 1.0 * pl.getUpgrades().cargoLossMultiplier(); // 1.0 or 0.5
+        bool loseCargo = (rand01() < cargoFailProb);
+        if (loseCargo) {
+            pl.loseCargo();
+            out.gameOver = true;
+            out.log = "[SPACE STORM] Cargo destroyed in the storm. Mission failed.";
+        }
+        else {
+            out.log = "[SPACE STORM] Cargo narrowly preserved.";
+        }
+    }
+    return out;
+}
+
+// Navigation Failure event (perkelta iš resolveHop)
+EventOutcome NavigationFailEvent::doExecute(Game& /*game*/, const HopContext& /*hop*/,
+    const RoundConfig& /*rc*/, Player& pl) {
+    EventOutcome out;
+    int loss = std::max(80, (int)std::lround(pl.getFuel() * 0.12));
+    pl.setFuel(std::max(0, pl.getFuel() - loss));
+    out.log = string("[NAVIGATION FAILURE] Course error. Fuel lost ")
+        + to_string(loss) + ". Remaining " + to_string(pl.getFuel()) + ".";
     return out;
 }
 
